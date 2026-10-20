@@ -1,0 +1,17 @@
+# Secrets: never commit
+*.env
+credentials
+secrets.yaml
+.env*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+esphome/build/
+
+# ESPHome caches/builds (the cache stores resolved !secret values)
+esphome/.esphome/
+**/.esphome/
+*.bin
