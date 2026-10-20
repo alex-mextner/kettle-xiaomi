@@ -1,0 +1,6 @@
+# Same set as Xiaomi-cloud-tokens-extractor v1.5.1 requirements.txt (the extractor is fetched separately, pinned by commit).
+requests
+pycryptodome
+charset-normalizer
+Pillow
+colorama
