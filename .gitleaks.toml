@@ -1,0 +1,8 @@
+title = "kettle-xiaomi"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Exact synthetic fixtures used by offline tests"
+regexes = ['''0123456789abcdef01234567''', '''0123456789abcdef0123456789abcdef''']
