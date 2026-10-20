@@ -1,0 +1,125 @@
+blueprint:
+  name: Kettle plug keep on
+  description: >
+    Keeps the kettle smart plug on by default. When the plug comes back after a power or connection
+    loss (unavailable -> off), and after a Home Assistant start with the plug off, it is switched on
+    again after a short pause, with retries. It never overrides an intentional cut: while the failsafe
+    flag set by the "Kettle power pulse" blueprint is on, the plug stays off. A manual switch-off in
+    Home Assistant is not reverted (only the unavailable -> off transition and HA start act). See
+    README.md next to this file.
+  domain: automation
+  author: kettle-xiaomi
+  homeassistant:
+    min_version: 2024.10.0
+  input:
+    switch_entity:
+      name: Smart plug
+      selector:
+        entity:
+          domain: switch
+    failsafe_flag_entity:
+      name: Failsafe tripped flag helper
+      description: >
+        input_boolean set by the "Kettle power pulse" blueprint when the failsafe cut the plug. While on,
+        this automation does nothing. Cleared when the plug is switched on, or by switching it off.
+      default: input_boolean.kettle_failsafe_tripped
+      selector:
+        entity:
+          domain: input_boolean
+    start_delay_seconds:
+      name: Pause before switching on (seconds)
+      default: 4
+      selector:
+        number:
+          min: 0
+          max: 60
+          step: 1
+          unit_of_measurement: s
+          mode: box
+    retry_pause_seconds:
+      name: Pause between attempts (seconds)
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 120
+          step: 1
+          unit_of_measurement: s
+          mode: box
+    max_attempts:
+      name: Attempts
+      default: 3
+      selector:
+        number:
+          min: 1
+          max: 10
+          step: 1
+          mode: box
+
+mode: parallel
+max: 5
+max_exceeded: silent
+
+variables:
+  plug: !input switch_entity
+  flag: !input failsafe_flag_entity
+  start_delay: !input start_delay_seconds
+  retry_pause: !input retry_pause_seconds
+  attempts: !input max_attempts
+
+triggers:
+  - trigger: state
+    id: power_back
+    entity_id: !input switch_entity
+    from: unavailable
+    to: "off"
+  - trigger: state
+    id: plug_on
+    entity_id: !input switch_entity
+    to: "on"
+  - trigger: homeassistant
+    id: ha_start
+    event: start
+
+actions:
+  # Plug is on (by hand, by the pulse restore, by this automation): a failsafe cut is history.
+  - if:
+      - condition: template
+        value_template: "{{ trigger.id == 'plug_on' }}"
+    then:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: !input failsafe_flag_entity
+      - stop: Plug is on
+  # After an HA start the cloud integration needs time to load the entity.
+  - if:
+      - condition: template
+        value_template: "{{ trigger.id == 'ha_start' }}"
+    then:
+      - wait_template: "{{ states(plug) not in ['unavailable', 'unknown'] }}"
+        timeout: "00:02:00"
+        continue_on_timeout: true
+  - condition: template
+    value_template: "{{ is_state(plug, 'off') and is_state(flag, 'off') }}"
+  - delay:
+      seconds: "{{ start_delay | float(4) | round(0) | int }}"
+  - condition: template
+    value_template: "{{ is_state(plug, 'off') and is_state(flag, 'off') }}"
+  - repeat:
+      sequence:
+        - if:
+            - condition: template
+              value_template: "{{ is_state(plug, 'off') and is_state(flag, 'off') }}"
+          then:
+            - action: switch.turn_on
+              target:
+                entity_id: !input switch_entity
+              continue_on_error: true
+        - wait_template: "{{ is_state(plug, 'on') or is_state(flag, 'on') }}"
+          timeout: "{{ retry_pause | float(10) | round(0) | int }}"
+          continue_on_timeout: true
+      until:
+        - condition: template
+          value_template: >-
+            {{ is_state(plug, 'on') or is_state(flag, 'on')
+               or repeat.index >= (attempts | int(3)) }}

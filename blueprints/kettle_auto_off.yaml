@@ -1,0 +1,623 @@
+blueprint:
+  name: Kettle power pulse at target temperature
+  description: >
+    The kettle heats to 100 C by itself. When the water reaches the target temperature (default:
+    keep-warm temperature of the active kettle profile, mirrored by
+    sensor.kettle_keep_warm_target_temperature) the plug is turned off and, after a short pause
+    (default 2 s), on again: a power pulse that stops heating, after which the kettle keeps warm
+    on its own. A failsafe turns the plug off if heating does not reach the target in time.
+    Unavailable or unknown sensor values (kettle without power, BLE lost) never switch the plug.
+    See README.md next to this file.
+  domain: automation
+  author: kettle-xiaomi
+  homeassistant:
+    min_version: 2024.10.0
+  input:
+    water_temperature:
+      name: Water temperature sensor
+      default: sensor.kettle_water_temperature
+      selector:
+        entity:
+          domain: sensor
+    status_sensor:
+      name: Kettle status sensor
+      description: Used for the "kettle is heating" condition.
+      default: sensor.kettle_status
+      selector:
+        entity:
+          domain: sensor
+    heating_statuses:
+      name: Statuses that count as "heating"
+      description: >
+        Values of the status sensor (yunmi_kettle enum) at which reaching the target counts. Only
+        plain heating by default: on the live kettle the kettle's own keep-warm (button) shows as
+        boil_keepwarm and must never be cut. Enum: standby, heating, boil_keepwarm, heat_to_set,
+        cooling, abnormal.
+      default:
+        - heating
+      selector:
+        select:
+          multiple: true
+          options:
+            - standby
+            - heating
+            - boil_keepwarm
+            - heat_to_set
+            - cooling
+            - abnormal
+    target_sensor:
+      name: Target temperature sensor
+      description: Mirrors the keep-warm temperature of the active kettle profile.
+      default: sensor.kettle_keep_warm_target_temperature
+      selector:
+        entity:
+          domain: sensor
+    target_mode:
+      name: Target source
+      description: >
+        "sensor" uses the target temperature sensor; "override" uses the override entity below
+        (falls back to the sensor, then to the fallback target, while it has no numeric value).
+      default: sensor
+      selector:
+        select:
+          options:
+            - sensor
+            - override
+    target_override:
+      name: Override target (optional)
+      description: input_number or number entity with a manual target. Only used in "override" mode.
+      default: ""
+      selector:
+        entity:
+          domain:
+            - input_number
+            - number
+    fallback_target:
+      name: Fallback target temperature
+      description: Used only when neither the sensor nor the override has a numeric value.
+      default: 75
+      selector:
+        number:
+          min: 40
+          max: 100
+          step: 1
+          unit_of_measurement: "°C"
+          mode: box
+    offset:
+      name: Overheat offset
+      description: >
+        Pulse this many degrees BEFORE the target. It compensates what is not modelled: the sensor
+        value is a few seconds old when it is published and the heater keeps heating the water after the
+        power is cut. Measured on the live kettle (one run, 78 -> 82 C after the cut): 3.5 C.
+        0 = at target. With the predictive timer the remaining overshoot comes from this.
+      default: 3.5
+      selector:
+        number:
+          min: -10
+          max: 40
+          step: 0.5
+          unit_of_measurement: "°C"
+          mode: box
+    heat_rate_entity:
+      name: Heating rate helper
+      description: >
+        input_number helper (unit C/s) holding the running estimate of the heating rate, reset to the
+        default below at the start of every heating.
+      default: input_number.kettle_heat_rate
+      selector:
+        entity:
+          domain: input_number
+    heat_rate_default:
+      name: Default heating rate (C/s)
+      description: >
+        Start value of the rate estimate. Measured on the live kettle: 0.39 C/s (37 -> 78 C in 105 s,
+        one run, unknown water amount; depends on volume).
+      default: 0.39
+      selector:
+        number:
+          min: 0.1
+          max: 1.5
+          step: 0.01
+          mode: box
+    latency_seconds:
+      name: Switch-off latency (seconds)
+      description: >
+        Time from the temperature reading to the plug reporting off. Measured on the live Tuya plug:
+        1.4 s. The predictive timer fires this much earlier.
+      default: 1.4
+      selector:
+        number:
+          min: 0
+          max: 10
+          step: 0.1
+          unit_of_measurement: s
+          mode: box
+    poll_period_seconds:
+      name: Poll period for the predictive timer (seconds)
+      description: >
+        A predictive timer is armed when the threshold is expected sooner than this after a reading.
+        Real period of fast polling is about 16 s, so 20 s covers one period with a margin.
+      default: 20
+      selector:
+        number:
+          min: 5
+          max: 120
+          step: 1
+          unit_of_measurement: s
+          mode: box
+    switch_entity:
+      name: Smart plug
+      selector:
+        entity:
+          domain: switch
+    restore_after_seconds:
+      name: Power pulse pause (seconds)
+      description: >
+        At the target the plug is turned off and, after this many seconds, on again, so the kettle
+        stops heating and keeps warm. 0 = leave the plug off. Not applied after a failsafe cut.
+        Kettle behavior after power returns is not verified on a real plug.
+      default: 2
+      selector:
+        number:
+          min: 0
+          max: 600
+          step: 1
+          unit_of_measurement: s
+          mode: box
+    armed_entity:
+      name: Re-arm flag helper
+      description: >
+        input_boolean helper. A target reach pulses only while armed. The pulse/plug off disarms it,
+        it is armed again when the water cooled "Re-arm drop" below the target (so hot water after
+        the power returns never pulses again) and at HA start.
+      default: input_boolean.kettle_heat_armed
+      selector:
+        entity:
+          domain: input_boolean
+    rearm_drop:
+      name: Re-arm drop
+      description: Degrees below the target the water must fall before the next target reach counts as a new heating.
+      default: 3
+      selector:
+        number:
+          min: 1
+          max: 30
+          step: 0.5
+          unit_of_measurement: "°C"
+          mode: box
+    max_heating_minutes:
+      name: Maximum heating time (failsafe)
+      description: >
+        Cut the plug (no restore) if it is on, the status is in the list above and the water stays below
+        the target, continuously for this long. Only while armed, i.e. before the first target
+        reach of a heating.
+      default: 15
+      selector:
+        number:
+          min: 1
+          max: 120
+          step: 1
+          unit_of_measurement: min
+          mode: box
+    fast_poll_seconds:
+      name: Fast poll interval (seconds)
+      description: >
+        While a heating is in progress the kettle sensor is refreshed this often. One BLE poll takes
+        about 6 s and Home Assistant's coordinator waits at least 10 s between refresh requests, so the
+        real period is about 16 s however low this is set. 10 is the useful minimum.
+      default: 10
+      selector:
+        number:
+          min: 10
+          max: 120
+          step: 1
+          unit_of_measurement: s
+          mode: box
+    fast_poll_max_minutes:
+      name: Fast poll maximum duration
+      description: >
+        Fast polling stops this many minutes after it started (heating seen or plug switched on),
+        or earlier when the kettle is back in standby or the plug is off.
+      default: 60
+      selector:
+        number:
+          min: 1
+          max: 240
+          step: 1
+          unit_of_measurement: min
+          mode: box
+    poll_active_entity:
+      name: Fast poll running flag helper
+      description: input_boolean helper, guard against parallel poll loops. Stale (older than the maximum duration + 2 min) counts as off.
+      default: input_boolean.kettle_poll_active
+      selector:
+        entity:
+          domain: input_boolean
+    failsafe_flag_entity:
+      name: Failsafe tripped flag helper
+      description: >
+        input_boolean helper set when the failsafe cuts the plug. Used by the "Kettle plug keep on"
+        blueprint so that it does not switch the plug back on after a failsafe. Cleared by switching
+        the plug on or by switching this helper off.
+      default: input_boolean.kettle_failsafe_tripped
+      selector:
+        entity:
+          domain: input_boolean
+    notify_service:
+      name: Notify service (optional)
+      description: Full service name, for example notify.mobile_app_phone. Empty = no push notification.
+      default: ""
+      selector:
+        text:
+    persistent_notification:
+      name: Create persistent notification
+      default: true
+      selector:
+        boolean:
+
+mode: parallel
+max: 10
+max_exceeded: silent
+
+trigger_variables:
+  water_sensor: !input water_temperature
+  status_sensor: !input status_sensor
+  heating_statuses: !input heating_statuses
+  target_sensor: !input target_sensor
+  target_mode: !input target_mode
+  target_override: !input target_override
+  fallback_target: !input fallback_target
+  offset: !input offset
+  plug: !input switch_entity
+  armed_entity: !input armed_entity
+  rearm_drop: !input rearm_drop
+
+variables:
+  water_sensor: !input water_temperature
+  status_sensor: !input status_sensor
+  heating_statuses: !input heating_statuses
+  target_sensor: !input target_sensor
+  target_mode: !input target_mode
+  target_override: !input target_override
+  fallback_target: !input fallback_target
+  offset: !input offset
+  plug: !input switch_entity
+  armed_entity: !input armed_entity
+  max_minutes: !input max_heating_minutes
+  restore_after: !input restore_after_seconds
+  notify_service: !input notify_service
+  use_persistent: !input persistent_notification
+  poll_entity: !input poll_active_entity
+  fast_poll: !input fast_poll_seconds
+  fast_max: !input fast_poll_max_minutes
+  rate_entity: !input heat_rate_entity
+  heat_rate_default: !input heat_rate_default
+  latency_s: !input latency_seconds
+  poll_period: !input poll_period_seconds
+
+triggers:
+  # Edge trigger: fires only on the false -> true transition of the template (this is the
+  # hysteresis: no repeat firing while the water stays above the target). Non-numeric
+  # (unavailable/unknown) readings make every template here false.
+  - trigger: template
+    id: target_reached
+    value_template: >-
+      {% set tgt = fallback_target | float(75) %}
+      {% if target_mode == 'override' and target_override and is_number(states(target_override)) %}
+        {% set tgt = states(target_override) | float %}
+      {% elif is_number(states(target_sensor)) %}
+        {% set tgt = states(target_sensor) | float %}
+      {% endif %}
+      {% set thr = tgt - (offset | float(0)) %}
+      {% set cur = states(water_sensor) %}
+      {{ is_number(cur) and (cur | float) >= thr }}
+  # The water fell far enough below the target: the next target reach counts as a new heating.
+  - trigger: template
+    id: drop
+    value_template: >-
+      {% set tgt = fallback_target | float(75) %}
+      {% if target_mode == 'override' and target_override and is_number(states(target_override)) %}
+        {% set tgt = states(target_override) | float %}
+      {% elif is_number(states(target_sensor)) %}
+        {% set tgt = states(target_sensor) | float %}
+      {% endif %}
+      {% set thr = tgt - (offset | float(0)) %}
+      {% set cur = states(water_sensor) %}
+      {{ is_number(cur) and (cur | float) < thr - (rearm_drop | float(3)) }}
+  # Failsafe: plug on, kettle heating, target not reached, continuously for the max heating time.
+  # Only while armed (before the first target reach of a heating): after a pulse the kettle is in
+  # keep-warm and its temperature may sag, this must not cut it.
+  - trigger: template
+    id: failsafe
+    value_template: >-
+      {% set tgt = fallback_target | float(75) %}
+      {% if target_mode == 'override' and target_override and is_number(states(target_override)) %}
+        {% set tgt = states(target_override) | float %}
+      {% elif is_number(states(target_sensor)) %}
+        {% set tgt = states(target_sensor) | float %}
+      {% endif %}
+      {% set thr = tgt - (offset | float(0)) %}
+      {% set cur = states(water_sensor) %}
+      {{ is_state(plug, 'on') and states(status_sensor) in heating_statuses
+         and is_state(armed_entity, 'on')
+         and is_number(cur) and (cur | float) < thr }}
+    for:
+      minutes: !input max_heating_minutes
+  - trigger: state
+    id: plug_off
+    entity_id: !input switch_entity
+    to: "off"
+  # Every new water temperature reading: heating rate estimate and the predictive pulse timer.
+  - trigger: state
+    id: temp_update
+    entity_id: !input water_temperature
+    not_from:
+      - unavailable
+      - unknown
+    not_to:
+      - unavailable
+      - unknown
+  # Start of fast polling: heating seen (edge) or the plug switched on (status may not be updated yet).
+  - trigger: template
+    id: poll_start
+    value_template: "{{ is_state(plug, 'on') and states(status_sensor) in heating_statuses }}"
+  - trigger: state
+    id: poll_start_plug
+    entity_id: !input switch_entity
+    from: "off"
+    to: "on"
+  - trigger: homeassistant
+    id: ha_start
+    event: start
+
+actions:
+  - variables:
+      target_now: >-
+        {% set tgt = fallback_target | float(75) %}
+        {% if target_mode == 'override' and target_override and is_number(states(target_override)) %}
+          {% set tgt = states(target_override) | float %}
+        {% elif is_number(states(target_sensor)) %}
+          {% set tgt = states(target_sensor) | float %}
+        {% endif %}
+        {% set thr = tgt - (offset | float(0)) %}
+        {% set cur = states(water_sensor) %}
+        {{ tgt }}
+      temp_now: "{{ states(water_sensor) }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'target_reached' }}"
+        sequence:
+          # Only act while the plug is on, the kettle reports a heating status (unavailable/unknown
+          # is not in the list) and the flag is armed (a cool-down below the target happened since
+          # the last reach, so hot water after a power pulse never re-fires).
+          - condition: template
+            value_template: "{{ is_state(plug, 'on') and states(status_sensor) in heating_statuses }}"
+          - condition: template
+            value_template: "{{ is_state(armed_entity, 'on') }}"
+          - variables:
+              restore: true
+              title: Kettle ready
+              message: >-
+                Kettle reached {{ temp_now }} °C (target {{ target_now }} °C, offset {{ offset }} °C),
+                power pulse: plug off{{ ', on again in ' ~ restore_after ~ ' s' if (restore_after | float(0)) > 0 }}.
+          - &cut
+            sequence:
+              - action: switch.turn_off
+                target:
+                  entity_id: !input switch_entity
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: !input armed_entity
+              - parallel:
+                  - if:
+                      - condition: template
+                        value_template: "{{ use_persistent }}"
+                    then:
+                      - action: persistent_notification.create
+                        data:
+                          title: "{{ title }}"
+                          message: "{{ message }}"
+                  - if:
+                      - condition: template
+                        value_template: "{{ notify_service | length > 0 }}"
+                    then:
+                      - action: "{{ notify_service }}"
+                        data:
+                          title: "{{ title }}"
+                          message: "{{ message }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ restore and (restore_after | float(0)) > 0 }}"
+                then:
+                  - delay:
+                      seconds: "{{ restore_after | float(0) | round(0) | int }}"
+                  # Only if nobody switched it in the meantime.
+                  - condition: template
+                    value_template: "{{ is_state(plug, 'off') }}"
+                  - action: switch.turn_on
+                    target:
+                      entity_id: !input switch_entity
+      # Predictive pulse. Every new temperature reading during a heating updates the heating rate (EMA
+      # of the last readings, noise-guarded) and estimates the time to the threshold. When that is
+      # sooner than the next reading would arrive (poll_period_seconds), a timer is started and the
+      # pulse is done by the timer, minus the measured switch-off latency. The wait is cancelled by
+      # any new reading (a new estimate replaces it), status change, plug off or armed off.
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'temp_update' }}"
+        sequence:
+          - condition: template
+            value_template: >-
+              {{ is_state(plug, 'on') and states(status_sensor) in heating_statuses
+                 and is_number(trigger.to_state.state) and is_number(trigger.from_state.state) }}
+          # A heating that is visibly below the threshold arms the pulse again (after an earlier pulse the
+          # flag is off; the cool-down re-arm may not have been seen, e.g. a refill with cold water).
+          - if:
+              - condition: template
+                value_template: >-
+                  {{ is_state(armed_entity, 'off')
+                     and (trigger.to_state.state | float) < (target_now | float(0)) - (offset | float(0)) - 1 }}
+            then:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: !input armed_entity
+          - condition: template
+            value_template: "{{ is_state(armed_entity, 'on') }}"
+          - variables:
+              dt: "{{ (trigger.to_state.last_changed - trigger.from_state.last_changed).total_seconds() }}"
+              rate_old: "{{ states(rate_entity) | float(heat_rate_default | float(0.39)) }}"
+          - variables:
+              inst: >-
+                {{ (((trigger.to_state.state | float) - (trigger.from_state.state | float)) / dt) if dt > 0 else 0 }}
+          - variables:
+              inst_ok: "{{ dt >= 4 and dt <= 90 and inst >= 0.05 and inst <= 1.5 }}"
+          # Noise guard: a single reading may move the estimate by at most 30%/+40% of the old value
+          # (the new reading is clamped to 0.7..1.4 x old before averaging).
+          - variables:
+              inst_c: "{{ [[inst, 0.7 * rate_old] | max, 1.4 * rate_old] | min }}"
+          - variables:
+              rate: >-
+                {{ [[((0.5 * rate_old + 0.5 * inst_c) if inst_ok else rate_old), 0.1] | max, 1.5] | min }}
+          - if:
+              - condition: template
+                value_template: "{{ inst_ok }}"
+            then:
+              - action: input_number.set_value
+                target:
+                  entity_id: !input heat_rate_entity
+                data:
+                  value: "{{ rate | round(3) }}"
+          - variables:
+              t_total: >-
+                {{ ((target_now | float(0)) - (offset | float(0)) - (trigger.to_state.state | float)) / rate }}
+              age: "{{ (now() - trigger.to_state.last_changed).total_seconds() }}"
+          - variables:
+              delay_s: "{{ [t_total - (latency_s | float(1.4)) - age, 0.05] | max }}"
+          # Only when the threshold is reached before the next reading is due.
+          - condition: template
+            value_template: "{{ t_total > 0 and t_total <= (poll_period | float(20)) }}"
+          - wait_for_trigger:
+              - trigger: state
+                entity_id: !input water_temperature
+              - trigger: state
+                entity_id: !input status_sensor
+              - trigger: state
+                entity_id: !input switch_entity
+                to: "off"
+              - trigger: state
+                entity_id: !input armed_entity
+                to: "off"
+            timeout: "{{ delay_s | round(2) }}"
+            continue_on_timeout: true
+          - condition: template
+            value_template: >-
+              {{ wait.trigger is none and is_state(plug, 'on')
+                 and states(status_sensor) in heating_statuses and is_state(armed_entity, 'on') }}
+          - variables:
+              restore: true
+              title: Kettle ready (predicted)
+              message: >-
+                Predicted target: reading {{ trigger.to_state.state }} °C, rate {{ rate | round(2) }} °C/s,
+                pulse {{ delay_s | round(1) }} s after the reading (target {{ target_now }} °C, offset {{ offset }} °C).
+                Plug off{{ ', on again in ' ~ restore_after ~ ' s' if (restore_after | float(0)) > 0 }}.
+          - *cut
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'drop' }}"
+        sequence:
+          - condition: template
+            value_template: "{{ is_state(armed_entity, 'off') }}"
+          - action: input_boolean.turn_on
+            target:
+              entity_id: !input armed_entity
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'failsafe' }}"
+        sequence:
+          - condition: template
+            value_template: "{{ is_state(plug, 'on') }}"
+          - variables:
+              restore: false
+              title: Kettle failsafe
+              message: >-
+                Failsafe: kettle was heating for {{ max_minutes }} min without reaching the target;
+                plug turned off and not restored. Water {{ temp_now }} °C, target {{ target_now }} °C.
+          # Remember the intentional cut before switching: the "Kettle plug keep on" automation
+          # respects this flag and leaves the plug off until it is cleared (plug switched on by hand
+          # or the helper switched off).
+          - action: input_boolean.turn_on
+            target:
+              entity_id: !input failsafe_flag_entity
+          - *cut
+      # Plug went off for any reason (including the pulse): disarm. It re-arms when the water cools
+      # below the target by rearm_drop (or the sensor comes back cold) or at HA start.
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'plug_off' }}"
+        sequence:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: !input armed_entity
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'ha_start' }}"
+        sequence:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: !input armed_entity
+          - action: input_boolean.turn_off
+            target:
+              entity_id: !input poll_active_entity
+      # Fast polling: the integration only polls (default 60 s), so while a heating is in progress
+      # refresh the water temperature sensor (shared coordinator = one BLE poll) every
+      # fast_poll_seconds. One loop at a time (guard helper with a staleness limit), at most
+      # fast_poll_max_minutes from the start, stops when the kettle is back in standby (after a 60 s
+      # grace for the first update) or when the plug has been off longer than a power pulse.
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id in ['poll_start', 'poll_start_plug'] }}"
+        sequence:
+          - condition: template
+            value_template: >-
+              {% set g = states[poll_entity] %}
+              {{ g is not none and not (g.state == 'on'
+                 and (now() - g.last_changed).total_seconds() < (fast_max | float(60)) * 60 + 120) }}
+          - action: input_boolean.turn_on
+            target:
+              entity_id: !input poll_active_entity
+          # New heating: restart the rate estimate from the default.
+          - action: input_number.set_value
+            target:
+              entity_id: !input heat_rate_entity
+            data:
+              value: "{{ heat_rate_default | float(0.39) }}"
+          - variables:
+              loop_start: "{{ now().timestamp() }}"
+          - repeat:
+              sequence:
+                - action: homeassistant.update_entity
+                  target:
+                    entity_id: !input water_temperature
+                  continue_on_error: true
+                # Unavailable/unknown sensors: not more often than every 30 s.
+                - delay:
+                    seconds: >-
+                      {% if is_number(states(water_sensor)) and states(status_sensor) not in ['unavailable', 'unknown'] %}
+                        {{ fast_poll | float(10) | round(0) | int }}
+                      {% else %}
+                        {{ [fast_poll | float(10), 30] | max | round(0) | int }}
+                      {% endif %}
+              until:
+                - condition: template
+                  value_template: >-
+                    {% set elapsed = now().timestamp() - loop_start %}
+                    {% set p = states[plug] %}
+                    {% set pulse = p is not none and p.state == 'off'
+                       and (now() - p.last_changed).total_seconds() < (restore_after | float(0)) + 10 %}
+                    {{ elapsed >= (fast_max | float(60)) * 60
+                       or (states(status_sensor) == 'standby' and elapsed > 60)
+                       or not (is_state(plug, 'on') or pulse) }}
+          - action: input_boolean.turn_off
+            target:
+              entity_id: !input poll_active_entity
