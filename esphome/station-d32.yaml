@@ -1,0 +1,15 @@
+# Lolin D32 station: BLE proxy (base, always) + optional modules.
+# Enable a module by uncommenting its line; any combination is valid.
+# Pin map and rationale: docs/lolin-d32.md. Modules live in esphome/d32/.
+substitutions:
+  name: btproxy-kitchen
+
+packages:
+  base: !include d32/base.yaml
+  # Shared UI globals; keep it enabled (tiny, harmless without UI modules).
+  state: !include d32/state.yaml
+  # display: !include d32/display.yaml   # SSD1306 128x64, I2C
+  # input: !include d32/input.yaml       # EC11 encoder + OK/BACK/TARE buttons
+  # rfid: !include d32/rfid.yaml         # PN532 SPI + 3d-api call (PROPOSAL endpoint)
+  # scale: !include d32/scale.yaml       # HX711 load cell
+  # air: !include d32/air.yaml           # PMS5003 + SHT41 + SGP41

@@ -1,0 +1,43 @@
+# Air sensors: PMS5003 (UART2 RX GPIO16 <- sensor TXD; sensor needs 5 V), SHT41 (0x44) and
+# SGP41 on the I2C bus (SDA GPIO21, SCL GPIO22; shared with the display, addresses differ).
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  scan: true
+
+uart:
+  id: uart_pm
+  rx_pin: GPIO16
+  baud_rate: 9600
+
+sensor:
+  - platform: pmsx003
+    type: PMSX003
+    uart_id: uart_pm
+    pm_1_0:
+      name: "PM1.0"
+    pm_2_5:
+      name: "PM2.5"
+    pm_10_0:
+      name: "PM10"
+  - platform: sht4x
+    id: sht41
+    address: 0x44
+    temperature:
+      id: air_temp
+      name: "Air temperature"
+    humidity:
+      id: air_hum
+      name: "Air humidity"
+    update_interval: 10s
+  - platform: sgp4x
+    voc_index:
+      name: "VOC index"
+      id: voc_index
+    nox_index:
+      name: "NOx index"
+      id: nox_index
+    compensation:
+      humidity_source: air_hum
+      temperature_source: air_temp
+    update_interval: 1s     # the Sensirion algorithm requires 1 Hz sampling

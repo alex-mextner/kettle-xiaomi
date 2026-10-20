@@ -1,0 +1,4 @@
+# Pure BLE proxy: only the base package (the firmware currently flashed on the board).
+# Optional modules: see station-d32.yaml.
+packages:
+  base: !include d32/base.yaml

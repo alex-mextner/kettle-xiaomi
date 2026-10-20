@@ -1,0 +1,23 @@
+# HX711 load cell: DT GPIO32, SCK GPIO33. Publishes "Spool gross weight" (g) and mirrors the
+# value into globals weight_g / raw_reading for the display, rfid and TARE button.
+sensor:
+  - platform: hx711
+    id: scale_raw
+    dout_pin: GPIO32
+    clk_pin: GPIO33
+    gain: 128
+    update_interval: 0.5s
+    internal: true
+    on_value:
+      - lambda: 'id(raw_reading) = x;'
+  - platform: template
+    id: scale_g
+    name: "Spool gross weight"
+    unit_of_measurement: g
+    accuracy_decimals: 0
+    update_interval: 0.5s
+    # 420.0 = placeholder calibration (raw counts per gram): calibrate with a known weight.
+    lambda: |-
+      float g = (id(scale_raw).state - id(tare_raw)) / 420.0f;
+      id(weight_g) = g;
+      return g;

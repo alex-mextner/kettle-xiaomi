@@ -1,0 +1,32 @@
+# Shared state of the station UI (globals only). Included ONCE from station-d32.yaml: the
+# display, input, rfid and scale modules read/write these ids and do not include it
+# themselves (a second inclusion would redefine the ids).
+globals:
+  - id: op_idx                # 0..6 -> load/unload/dry_in/dry_out/store/weigh/note
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: spool_uid
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+  - id: spool_label           # short status/answer line shown on the display
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+  - id: weight_g              # gross weight in grams, written by the scale module
+    type: float
+    restore_value: no
+    initial_value: '0'
+  - id: raw_reading           # last HX711 raw value, written by the scale module (used by TARE)
+    type: float
+    restore_value: no
+    initial_value: '0'
+  - id: tare_raw
+    type: float
+    restore_value: yes
+    initial_value: '0'
+  - id: ok_pending            # set by the OK button, consumed by the rfid module (if present)
+    type: bool
+    restore_value: no
+    initial_value: 'false'

@@ -1,0 +1,22 @@
+# SSD1306 128x64 on I2C (shared bus: SDA GPIO21, SCL GPIO22). Needs no other module.
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  scan: true
+
+font:
+  - file: "gfonts://Roboto"
+    id: f12
+    size: 12
+
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    address: 0x3C
+    update_interval: 250ms
+    lambda: |-
+      static const char *O[] = {"LOAD", "UNLOAD", "DRY IN", "DRY OUT", "STORE", "WEIGH", "NOTE"};
+      it.printf(0, 0, id(f12), "Op: %s", O[id(op_idx)]);
+      it.printf(0, 16, id(f12), "Tag: %s", id(spool_uid).c_str());
+      it.printf(0, 32, id(f12), "%s", id(spool_label).c_str());
+      it.printf(0, 48, id(f12), "%.0f g", id(weight_g));

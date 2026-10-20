@@ -1,0 +1,73 @@
+# PN532 on SPI (CLK GPIO18, MISO GPIO19, MOSI GPIO23, CS GPIO4; module in SPI mode).
+# A touch SELECTS the spool; the OK button (input module) triggers the request.
+#
+# PROPOSAL: POST /v1/tags/scan is NOT implemented in 3d-api yet (docs/printops/rfid.md §3.6
+# is a proposal); until it exists the request returns an error shown on the display as "ERR <code>".
+# Without this module OK does nothing.
+#
+# Needs secret printops_station_token_header ("Bearer <station token>") and substitutions
+# station_id / api_base (defaults below, override in the top-level file).
+substitutions:
+  station_id: "spool-station-d32"
+  # 3d-api over Tailscale; alternative on the LAN: http://192.168.x.x:8765
+  # Plain HTTP: the bearer token travels unencrypted -- acceptable only inside Tailscale/LAN.
+  api_base: "http://<3d-api-host>:8765"
+
+spi:
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+
+http_request:
+  timeout: 5s
+
+pn532_spi:
+  id: nfc_reader
+  cs_pin: GPIO4
+  update_interval: 1s
+  on_tag:
+    then:
+      - lambda: |-
+          id(spool_uid) = x;
+          id(spool_label) = "";
+      - homeassistant.tag_scanned: !lambda 'return x;'
+
+# Fires when OK was pressed (input module sets ok_pending); sends the selected spool.
+interval:
+  - interval: 100ms
+    then:
+      - if:
+          condition:
+            lambda: 'return id(ok_pending);'
+          then:
+            - lambda: 'id(ok_pending) = false;'
+            - if:
+                condition:
+                  lambda: 'return !id(spool_uid).empty();'
+                then:
+                  - http_request.post:
+                      url: ${api_base}/v1/tags/scan
+                      capture_response: true
+                      request_headers:
+                        Content-Type: application/json
+                        Authorization: !secret printops_station_token_header
+                      json: !lambda |-
+                        static const char *OPS[] = {"load", "unload", "dry_in", "dry_out", "store", "weigh", "note"};
+                        root["station"] = "${station_id}";
+                        root["uid"] = id(spool_uid);
+                        root["op"] = OPS[id(op_idx)];
+                        root["weight_g"] = id(weight_g);
+                        root["nonce"] = str_sprintf("%08x%08x", (unsigned) random_uint32(), (unsigned) millis());
+                      on_response:
+                        then:
+                          - lambda: |-
+                              if (response->status_code == 200) id(spool_label) = body.substr(0, 40);
+                              else id(spool_label) = "ERR " + to_string(response->status_code);
+                  - homeassistant.event:
+                      event: esphome.spool_station
+                      data:
+                        station: ${station_id}
+                        uid: !lambda 'return id(spool_uid);'
+                        op: !lambda |-
+                          static const char *OPS[] = {"load", "unload", "dry_in", "dry_out", "store", "weigh", "note"};
+                          return std::string(OPS[id(op_idx)]);

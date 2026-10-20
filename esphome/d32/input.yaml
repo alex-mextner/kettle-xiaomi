@@ -1,0 +1,48 @@
+# EC11 encoder (A GPIO25, B GPIO26) + OK GPIO27 / BACK GPIO14 / TARE GPIO13, to GND.
+# OK only raises global ok_pending; the rfid module (if enabled) reacts to it.
+# TARE stores the current HX711 raw reading: it needs the scale module (raw_reading stays 0 without it).
+sensor:
+  - platform: rotary_encoder
+    id: enc
+    pin_a:
+      number: GPIO25
+      mode: INPUT_PULLUP
+    pin_b:
+      number: GPIO26
+      mode: INPUT_PULLUP
+    internal: true
+    on_clockwise:
+      - lambda: 'id(op_idx) = (id(op_idx) + 1) % 7;'
+    on_anticlockwise:
+      - lambda: 'id(op_idx) = (id(op_idx) + 6) % 7;'
+
+binary_sensor:
+  - platform: gpio            # OK / encoder push
+    pin:
+      number: GPIO27
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "OK"
+    internal: true
+    on_click:
+      - lambda: 'id(ok_pending) = true;'
+  - platform: gpio            # BACK / cancel
+    pin:
+      number: GPIO14
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "Back"
+    internal: true
+    on_click:
+      - lambda: |-
+          id(spool_uid) = "";
+          id(spool_label) = "";
+  - platform: gpio            # TARE: sets tare_raw from the scale module's raw value
+    pin:
+      number: GPIO13
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "Tare"
+    internal: true
+    on_click:
+      - lambda: 'id(tare_raw) = id(raw_reading);'
