@@ -1,0 +1,83 @@
+diff -r a/custom_components/yunmi_kettle/const.py b/custom_components/yunmi_kettle/const.py
+--- a/custom_components/yunmi_kettle/const.py	2026-10-21 02:40:33.346457278 +0200
++++ b/custom_components/yunmi_kettle/const.py	2026-10-21 02:40:33.347488644 +0200
+@@ -15,6 +15,9 @@
+ DEFAULT_NAME = "Чайник"
+ DEFAULT_TARGET_TEMP = 90
+ DEFAULT_POLL_INTERVAL = 60
++# While the kettle is heating: poll every FAST_POLL_INTERVAL s (status + temperature only).
++FAST_POLL_INTERVAL = 5
++FAST_POLL_STATUSES = {1}  # PROP_STATUS 1 = heating
+ MIN_TEMP = 40
+ MAX_TEMP = 95
+ 
+diff -r a/custom_components/yunmi_kettle/coordinator.py b/custom_components/yunmi_kettle/coordinator.py
+--- a/custom_components/yunmi_kettle/coordinator.py	2026-10-21 02:40:33.346559375 +0200
++++ b/custom_components/yunmi_kettle/coordinator.py	2026-10-21 02:40:33.347566872 +0200
+@@ -17,6 +17,8 @@
+     CONF_POLL_INTERVAL,
+     CONF_TOKEN,
+     DEFAULT_POLL_INTERVAL,
++    FAST_POLL_INTERVAL,
++    FAST_POLL_STATUSES,
+     DOMAIN,
+     DURATION_UNIT_MIN,
+     PROFILE_COUNT,
+@@ -47,6 +49,7 @@
+             hass, _LOGGER, name=f"{DOMAIN}_{self.address}",
+             update_interval=timedelta(seconds=interval),
+         )
++        self._idle_interval = timedelta(seconds=interval)
+         self._client: BleakClient | None = None
+         self._dev: YunmiKettle | None = None
+ 
+@@ -67,7 +70,11 @@
+     async def _async_update_data(self) -> dict:
+         try:
+             dev = await self._ensure_session()
+-            res = await dev.subscribe_and_read()
++            # While heating only status + temperature are read (~1 s instead of ~6 s).
++            heating = (self.data or {}).get("status") in FAST_POLL_STATUSES
++            res = await dev.subscribe_and_read(
++                pairs=[PROP_STATUS, PROP_CURRENT_TEMP] if heating else None
++            )
+             data: dict = dict(self.data or {})
+             if PROP_CURRENT_TEMP in res:
+                 data["current_temp"] = res[PROP_CURRENT_TEMP]
+@@ -86,8 +93,14 @@
+             active = data.get("active_profile", 0)
+             if f"profile_temp_{active + 1}" in data:
+                 data["profile_temp"] = data[f"profile_temp_{active + 1}"]
++            # Dynamic poll interval: fast while heating, the configured one otherwise.
++            self.update_interval = (
++                timedelta(seconds=FAST_POLL_INTERVAL)
++                if data.get("status") in FAST_POLL_STATUSES else self._idle_interval
++            )
+             return data
+         except Exception as err:  # noqa: BLE001
++            self.update_interval = self._idle_interval
+             await self._drop()
+             raise UpdateFailed(str(err)) from err
+ 
+diff -r a/custom_components/yunmi_kettle/protocol.py b/custom_components/yunmi_kettle/protocol.py
+--- a/custom_components/yunmi_kettle/protocol.py	2026-10-21 02:40:33.346636380 +0200
++++ b/custom_components/yunmi_kettle/protocol.py	2026-10-21 02:40:33.347628824 +0200
+@@ -385,12 +385,15 @@
+     # a framed multi-parcel transfer the device does not deliver over the proxy.
+     SUBSCRIBE_CHUNK = 1
+ 
+-    async def subscribe_and_read(self, collect: float = 4.0) -> dict[tuple[int, int], int]:
++    async def subscribe_and_read(
++        self, collect: float = 4.0, pairs: list[tuple[int, int]] | None = None
++    ) -> dict[tuple[int, int], int]:
+         """Read current property values by subscribing in small chunks, so each
+         response arrives as a single direct op=0x03 notify (which works over the
+-        proxy) rather than the un-deliverable big framed snapshot."""
++        proxy) rather than the un-deliverable big framed snapshot. ``pairs`` limits
++        the read to the given properties (default: all surfaced ones)."""
+         result: dict[tuple[int, int], int] = {}
+-        pairs = self.SUBSCRIBE_PAIRS
++        pairs = pairs or self.SUBSCRIBE_PAIRS
+         for i in range(0, len(pairs), self.SUBSCRIBE_CHUNK):
+             chunk = pairs[i:i + self.SUBSCRIBE_CHUNK]
+             await self._send_subscribe(chunk)
