@@ -1,0 +1,126 @@
+blueprint:
+  name: Kettle integration recover
+  description: >
+    The yunmi_kettle config entry retries a failed BLE connection only every 10 minutes (Home Assistant
+    backoff). This blueprint reloads the entry right away when the kettle plug is switched on (or the plug
+    came back after a power loss, or after a Home Assistant start) and the kettle status sensor is still
+    unavailable, and again after a pause, up to a few attempts. It does not touch the plug.
+  domain: automation
+  author: kettle-xiaomi
+  homeassistant:
+    min_version: 2024.10.0
+  input:
+    switch_entity:
+      name: Smart plug
+      selector:
+        entity:
+          domain: switch
+    status_sensor:
+      name: Kettle status sensor
+      default: sensor.kettle_status
+      selector:
+        entity:
+          domain: sensor
+    config_entry_id:
+      name: yunmi_kettle config entry
+      selector:
+        config_entry:
+          integration: yunmi_kettle
+    first_delay_seconds:
+      name: Wait after the plug turned on (seconds)
+      description: The kettle needs some seconds to boot before it accepts BLE connections.
+      default: 15
+      selector:
+        number:
+          min: 0
+          max: 120
+          step: 1
+          unit_of_measurement: s
+          mode: box
+    retry_pause_seconds:
+      name: Pause between attempts (seconds)
+      default: 30
+      selector:
+        number:
+          min: 10
+          max: 300
+          step: 1
+          unit_of_measurement: s
+          mode: box
+    max_attempts:
+      name: Attempts
+      default: 3
+      selector:
+        number:
+          min: 1
+          max: 10
+          step: 1
+          mode: box
+    unavailable_minutes:
+      name: Also reload when the status stays unavailable with the plug on for (minutes)
+      default: 3
+      selector:
+        number:
+          min: 1
+          max: 60
+          step: 1
+          unit_of_measurement: min
+          mode: box
+
+mode: single
+max_exceeded: silent
+
+trigger_variables:
+  plug: !input switch_entity
+  status: !input status_sensor
+
+variables:
+  plug: !input switch_entity
+  status: !input status_sensor
+  entry_id: !input config_entry_id
+  first_delay: !input first_delay_seconds
+  retry_pause: !input retry_pause_seconds
+  attempts: !input max_attempts
+
+triggers:
+  - trigger: state
+    id: plug_on
+    entity_id: !input switch_entity
+    from: "off"
+    to: "on"
+  - trigger: homeassistant
+    id: ha_start
+    event: start
+  # Status unavailable for N minutes while the plug is on (for example the kettle dropped BLE).
+  - trigger: template
+    id: unavailable_long
+    value_template: >-
+      {{ is_state(plug, 'on') and states(status) in ['unavailable', 'unknown'] }}
+    for:
+      minutes: !input unavailable_minutes
+
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.id != 'unavailable_long' or (states(status) in ['unavailable', 'unknown']) }}
+
+actions:
+  - delay:
+      seconds: "{{ first_delay | float(15) | round(0) | int }}"
+  - repeat:
+      sequence:
+        - if:
+            - condition: template
+              value_template: "{{ is_state(plug, 'on') and states(status) in ['unavailable', 'unknown'] }}"
+          then:
+            - action: homeassistant.reload_config_entry
+              data:
+                entry_id: "{{ entry_id }}"
+              continue_on_error: true
+            - delay:
+                seconds: "{{ retry_pause | float(30) | round(0) | int }}"
+      until:
+        - condition: template
+          value_template: >-
+            {{ not is_state(plug, 'on') or states(status) not in ['unavailable', 'unknown']
+               or repeat.index >= (attempts | int(3)) }}
