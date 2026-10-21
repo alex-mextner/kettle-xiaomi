@@ -99,6 +99,21 @@
 - Розетка Tuya (Smart Socket 16A, `product_id` 3nprwiontzyzpzng): настройки «состояние при включении питания» в
   диагностике нет (только `switch_1` и `countdown_1`), поэтому «включена по умолчанию» делает эта автоматизация.
 
+## Kettle integration recover (`kettle_entry_recover.yaml`)
+
+Запись `yunmi_kettle`, если чайник был недоступен при загрузке, повторяет подключение только раз в 10 минут (бэкофф
+Home Assistant: 5, 10, 20, 40, 80, 160, 320, 600 с). Блюпринт не ждёт: при включении розетки (`off` -> `on`), при старте
+HA или когда статус чайника недоступен дольше `unavailable_minutes` (3) при включённой розетке, ждёт
+`first_delay_seconds` (15 с, чайник грузится), и, пока `sensor.kettle_status` недоступен, вызывает
+`homeassistant.reload_config_entry` для записи, до `max_attempts` (3) раз с паузой `retry_pause_seconds` (30 с).
+Розетку не трогает. Импульс питания (розетка выключена на секунды) его не запускает: условие «розетка включена и
+статус недоступен» проверяется перед каждой попыткой. Вход `config_entry_id` выбирается из списка записей yunmi_kettle.
+
+Проверено на фейковой розетке и фейковом статусе: off -> on при недоступном статусе: перезагрузки на 5, 15, 25 с и
+стоп; статус появился на 12 с: одна перезагрузка; статус уже доступен: нет перезагрузок; выключение розетки в
+ожидании: нет; статус недоступен дольше минуты при включённой розетке: перезагрузки на 65, 75 с. На живой записи
+проверена перезагрузка вручную (чайник вернулся за ~15 с).
+
 ## Хелперы
 
 - `input_boolean.kettle_heat_armed`: флаг одного импульса на нагрев;
@@ -112,6 +127,8 @@
 - `automation.kettle_power_pulse` (id `kettle_power_pulse`): блюпринт `kettle_auto_off.yaml`, `switch_entity: switch.<plug_entity_id>`,
   остальные входы по умолчанию.
 - `automation.kettle_plug_keep_on` (id `kettle_plug_keep_on`): `kettle_plug_keep_on.yaml`, та же розетка.
+- `automation.kettle_integration_recover` (id `kettle_entry_recover`): блюпринт `kettle_entry_recover.yaml`,
+  `config_entry_id` записи yunmi_kettle.
 - Патч `yunmi_kettle-dynamic-interval` применяется к `<config>/custom_components/yunmi_kettle` (`coordinator.py`,
   `const.py`, `protocol.py`), затем перезапуск HA. Откат: `git apply -R patches/yunmi_kettle-dynamic-interval.patch`
   и перезапуск HA.
@@ -150,3 +167,5 @@ UI: Settings -> Automations & scenes -> Blueprints -> «Kettle power pulse at ta
 - Время быстрого чтения (две подписки), реальный период около 6 с, и работа предсказания при нём.
 - Откат на полное чтение при неполном/ошибочном быстром чтении проверен только на заглушке BLE.
 - Поведение розетки Tuya при настоящем обрыве питания.
+- Автовосстановление `kettle_entry_recover` на живом чайнике (цепочка «розетка on -> reload -> чайник доступен»)
+  не проверялось: розетку я не переключал.
