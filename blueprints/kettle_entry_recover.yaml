@@ -86,7 +86,10 @@ triggers:
   - trigger: state
     id: plug_on
     entity_id: !input switch_entity
-    from: "off"
+    from:
+      - "off"
+      - unavailable
+      - unknown
     to: "on"
   - trigger: homeassistant
     id: ha_start
