@@ -128,7 +128,7 @@ HA или когда статус чайника недоступен дольш
   остальные входы по умолчанию.
 - `automation.kettle_plug_keep_on` (id `kettle_plug_keep_on`): `kettle_plug_keep_on.yaml`, та же розетка.
 - `automation.kettle_integration_recover` (id `kettle_entry_recover`): блюпринт `kettle_entry_recover.yaml`,
-  `config_entry_id` записи yunmi_kettle.
+  обязательные входы: `switch_entity: switch.<plug_entity_id>` и `config_entry_id` записи yunmi_kettle.
 - Патч `yunmi_kettle-dynamic-interval` применяется к `<config>/custom_components/yunmi_kettle` (`coordinator.py`,
   `const.py`, `protocol.py`), затем перезапуск HA. Откат: `git apply -R patches/yunmi_kettle-dynamic-interval.patch`
   и перезапуск HA.
