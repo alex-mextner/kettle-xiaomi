@@ -153,9 +153,9 @@ blueprint:
     armed_entity:
       name: Cycle flag helper
       description: >
-        input_boolean helper. The pulse happens once per heating: the flag goes off with the pulse (or
-        when the plug goes off) and is set again when a new heating is seen below the threshold, and
-        at Home Assistant start.
+        input_boolean helper. One pulse per heating: the flag goes off with the pulse (or when the plug
+        goes off) and is set again ONLY by a cycle start: plug off -> on after a real off period, or the
+        kettle status changing from a non-heating status to heating. Never by temperature.
       default: input_boolean.kettle_heat_armed
       selector:
         entity:
@@ -252,9 +252,15 @@ triggers:
     id: plug_off
     entity_id: !input switch_entity
     to: "off"
-  - trigger: homeassistant
-    id: ha_start
-    event: start
+  # Cycle start transitions (re-arm and rate reset): plug off -> on, status change.
+  - trigger: state
+    id: plug_on
+    entity_id: !input switch_entity
+    from: "off"
+    to: "on"
+  - trigger: state
+    id: status_change
+    entity_id: !input status_sensor
 
 actions:
   - variables:
@@ -330,16 +336,7 @@ actions:
             value_template: >-
               {{ is_state(plug, 'on') and states(status_sensor) in heating_statuses
                  and is_number(trigger.to_state.state) and is_number(trigger.from_state.state) }}
-          # A heating visibly below the threshold arms the flag (it was cleared by the previous pulse).
-          - if:
-              - condition: template
-                value_template: >-
-                  {{ is_state(armed_entity, 'off')
-                     and (trigger.to_state.state | float) < (target_now | float(0)) - (offset | float(0)) - 1 }}
-            then:
-              - action: input_boolean.turn_on
-                target:
-                  entity_id: !input armed_entity
+          # The cycle flag must be on: it is set only by the cycle start transitions (see below).
           - condition: template
             value_template: "{{ is_state(armed_entity, 'on') }}"
           - variables:
@@ -425,10 +422,27 @@ actions:
           - action: input_boolean.turn_off
             target:
               entity_id: !input armed_entity
+      # A new cycle starts (and only here the cycle flag is set again, never by temperature):
+      #  - plug off -> on after a real off period (the power pulse restores the plug within
+      #    restore_after_seconds plus the cloud latency, which is shorter than the limit below), or
+      #  - the kettle status changes from a non-heating status to heating.
+      # The heating rate estimate restarts from the default.
       - conditions:
           - condition: template
-            value_template: "{{ trigger.id == 'ha_start' }}"
+            value_template: >-
+              {{ (trigger.id == 'plug_on' and trigger.from_state is not none
+                  and (trigger.to_state.last_changed - trigger.from_state.last_changed).total_seconds()
+                      > (restore_after | float(0)) + 20)
+                 or (trigger.id == 'status_change' and trigger.from_state is not none
+                     and trigger.to_state.state in heating_statuses
+                     and trigger.from_state.state not in heating_statuses
+                     and trigger.from_state.state not in ['unavailable', 'unknown']) }}
         sequence:
           - action: input_boolean.turn_on
             target:
               entity_id: !input armed_entity
+          - action: input_number.set_value
+            target:
+              entity_id: !input heat_rate_entity
+            data:
+              value: "{{ heat_rate_default | float(0.39) }}"
