@@ -1,6 +1,6 @@
 diff -r a/custom_components/yunmi_kettle/const.py b/custom_components/yunmi_kettle/const.py
---- a/custom_components/yunmi_kettle/const.py	2026-10-21 02:40:33.346457278 +0200
-+++ b/custom_components/yunmi_kettle/const.py	2026-10-21 02:40:33.347488644 +0200
+--- a/custom_components/yunmi_kettle/const.py	2026-10-21 03:24:43.415088064 +0200
++++ b/custom_components/yunmi_kettle/const.py	2026-10-21 03:25:11.670665624 +0200
 @@ -15,6 +15,9 @@
  DEFAULT_NAME = "Чайник"
  DEFAULT_TARGET_TEMP = 90
@@ -12,8 +12,8 @@ diff -r a/custom_components/yunmi_kettle/const.py b/custom_components/yunmi_kett
  MAX_TEMP = 95
  
 diff -r a/custom_components/yunmi_kettle/coordinator.py b/custom_components/yunmi_kettle/coordinator.py
---- a/custom_components/yunmi_kettle/coordinator.py	2026-10-21 02:40:33.346559375 +0200
-+++ b/custom_components/yunmi_kettle/coordinator.py	2026-10-21 02:40:33.347566872 +0200
+--- a/custom_components/yunmi_kettle/coordinator.py	2026-10-21 03:24:43.415072253 +0200
++++ b/custom_components/yunmi_kettle/coordinator.py	2026-10-21 03:25:11.670566368 +0200
 @@ -17,6 +17,8 @@
      CONF_POLL_INTERVAL,
      CONF_TOKEN,
@@ -31,20 +31,27 @@ diff -r a/custom_components/yunmi_kettle/coordinator.py b/custom_components/yunm
          self._client: BleakClient | None = None
          self._dev: YunmiKettle | None = None
  
-@@ -67,7 +70,11 @@
+@@ -67,7 +70,18 @@
      async def _async_update_data(self) -> dict:
          try:
              dev = await self._ensure_session()
 -            res = await dev.subscribe_and_read()
-+            # While heating only status + temperature are read (~1 s instead of ~6 s).
++            # While heating only status + temperature are read (~1 s instead of ~6 s). If that read
++            # raises or comes back without both values, one retry with the full read follows.
 +            heating = (self.data or {}).get("status") in FAST_POLL_STATUSES
-+            res = await dev.subscribe_and_read(
-+                pairs=[PROP_STATUS, PROP_CURRENT_TEMP] if heating else None
-+            )
++            if heating:
++                try:
++                    res = await dev.subscribe_and_read(pairs=[PROP_STATUS, PROP_CURRENT_TEMP])
++                except Exception:  # noqa: BLE001
++                    res = {}
++                if PROP_STATUS not in res or PROP_CURRENT_TEMP not in res:
++                    res = await dev.subscribe_and_read()
++            else:
++                res = await dev.subscribe_and_read()
              data: dict = dict(self.data or {})
              if PROP_CURRENT_TEMP in res:
                  data["current_temp"] = res[PROP_CURRENT_TEMP]
-@@ -86,8 +93,14 @@
+@@ -86,8 +100,14 @@
              active = data.get("active_profile", 0)
              if f"profile_temp_{active + 1}" in data:
                  data["profile_temp"] = data[f"profile_temp_{active + 1}"]
@@ -60,8 +67,8 @@ diff -r a/custom_components/yunmi_kettle/coordinator.py b/custom_components/yunm
              raise UpdateFailed(str(err)) from err
  
 diff -r a/custom_components/yunmi_kettle/protocol.py b/custom_components/yunmi_kettle/protocol.py
---- a/custom_components/yunmi_kettle/protocol.py	2026-10-21 02:40:33.346636380 +0200
-+++ b/custom_components/yunmi_kettle/protocol.py	2026-10-21 02:40:33.347628824 +0200
+--- a/custom_components/yunmi_kettle/protocol.py	2026-10-21 03:24:43.415035458 +0200
++++ b/custom_components/yunmi_kettle/protocol.py	2026-10-21 03:25:11.670738482 +0200
 @@ -385,12 +385,15 @@
      # a framed multi-parcel transfer the device does not deliver over the proxy.
      SUBSCRIBE_CHUNK = 1
