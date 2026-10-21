@@ -7,6 +7,7 @@ scripts/     get-kettle-token.sh, get_kettle_token.py, show-ha-setup.sh, flash-l
 esphome/     прошивки ESPHome: lolin-d32-btproxy.yaml (чистый BLE-прокси), station*.yaml, d32/*.yaml; secrets.example.yaml
 docs/        lolin-d32.md: справочник по плате и распиновке
 blueprints/  kettle_auto_off.yaml, kettle_plug_keep_on.yaml и README с подробным описанием
+patches/     yunmi_kettle-dynamic-interval.patch: быстрый опрос компонента yunmi_kettle во время нагрева (см. blueprints/README.md)
 captures/    parse_btsnoop.py: разбор HCI snoop-лога Android
 tests/       офлайн-тесты скриптов
 ```
@@ -102,7 +103,9 @@ scripts/flash-lolin.sh [--erase] [--port /dev/ttyUSB0] [--bin path]  # по ум
 
 ## Блюпринты
 
-`blueprints/kettle_auto_off.yaml` (импульс питания розетки при достижении температуры) и `blueprints/kettle_plug_keep_on.yaml` (розетка включена по умолчанию, с failsafe). Скопируйте их в `<config>/blueprints/automation/kettle/`; сущности по умолчанию и настройка описаны в `blueprints/README.md`. Интеграция чайника для HA не входит в этот репозиторий: используйте [opravdin/hass-yunmi-kettle-ble](https://github.com/opravdin/hass-yunmi-kettle-ble).
+`blueprints/kettle_auto_off.yaml`: упрощённая логика «нагрев → предсказание момента достижения цели → короткое выключение розетки (импульс)»; удержание температуры не используется (нижнюю кнопку чайника нажимают вручную, блюпринт реагирует только на статус `heating`). `blueprints/kettle_plug_keep_on.yaml` возвращает питание розетки после обрыва. Скопируйте их в `<config>/blueprints/automation/kettle/`; сущности по умолчанию и настройка описаны в `blueprints/README.md`.
+
+Для предсказания нужен частый опрос чайника: `patches/yunmi_kettle-dynamic-interval.patch` опрашивает его каждые 5 с во время нагрева (только статус и температура) и возвращает обычный интервал в остальное время. Патч содержит только diff (не копию кода) и применяется к вашей копии [opravdin/hass-yunmi-kettle-ble](https://github.com/opravdin/hass-yunmi-kettle-ble) (MIT, автор opravdin), которая в этот репозиторий не входит. Там же: `switch.kettle_keep_warm_after_boil` в этой интеграции назван неточно, это память удержания после подъёма (`siid 3 / piid 2`), а не режим кипячения. Живой нагрев с патчем не проверялся.
 
 ## Благодарности
 
