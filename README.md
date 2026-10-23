@@ -8,6 +8,7 @@ esphome/     прошивки ESPHome: lolin-d32-btproxy.yaml (чистый BLE-
 docs/        lolin-d32.md: справочник по плате и распиновке
 blueprints/  kettle_auto_off.yaml, kettle_plug_keep_on.yaml и README с подробным описанием
 patches/     yunmi_kettle-dynamic-interval.patch: быстрый опрос компонента yunmi_kettle во время нагрева (см. blueprints/README.md)
+patches/     yunmi_kettle-poll-timeout.patch: жёсткий таймаут опроса (25 с) и отключения (5 с) в yunmi_kettle, ставится поверх dynamic-interval
 captures/    parse_btsnoop.py: разбор HCI snoop-лога Android
 tests/       офлайн-тесты скриптов
 ```
@@ -108,6 +109,8 @@ scripts/flash-lolin.sh [--erase] [--port /dev/ttyUSB0] [--bin path]  # по ум
 `blueprints/kettle_entry_recover.yaml` — автовосстановление интеграции: если чайник был недоступен при загрузке HA, запись `yunmi_kettle` повторяет подключение только раз в 10 минут. Блюпринт при включении розетки, старте HA или долгой недоступности статуса перезагружает запись (до 3 попыток), не дожидаясь бэкоффа. В примере установки работают три автоматизации: `kettle_power_pulse`, `kettle_plug_keep_on` и `kettle_integration_recover`. Живая цепочка «розетка on → перезагрузка → чайник доступен» не проверялась.
 
 Для предсказания нужен частый опрос чайника: `patches/yunmi_kettle-dynamic-interval.patch` опрашивает его каждые 5 с во время нагрева (только статус и температура) и возвращает обычный интервал в остальное время. Патч содержит только diff (не копию кода) и применяется к вашей копии [opravdin/hass-yunmi-kettle-ble](https://github.com/opravdin/hass-yunmi-kettle-ble) (MIT, автор opravdin), которая в этот репозиторий не входит. Там же: `switch.kettle_keep_warm_after_boil` в этой интеграции назван неточно, это память удержания после подъёма (`siid 3 / piid 2`), а не режим кипячения. Живой нагрев с патчем не проверялся.
+
+`patches/yunmi_kettle-poll-timeout.patch` (ставится после dynamic-interval) ограничивает один опрос 25 секундами, а отключение зависшего Bluetooth-соединения 5 секундами. Раньше зависший опрос Bluetooth блокировал обновления на часы (23 октября 2026: с 06:55 до 08:53 UTC значение температуры стояло на 19 °C), а автоматизации принимали старое значение за свежее. Теперь по таймауту обновление считается неудачным, сущности становятся недоступными, сессия сбрасывается.
 
 ## Благодарности
 
